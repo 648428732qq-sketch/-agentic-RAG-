@@ -1,1290 +1,270 @@
-<p align="center">
-  <img alt="Agentic RAG for Dummies Logo" src="assets/logo.png" width="350px">
-</p>
+# 仲景智检：中医 Agentic RAG 检索与证据门控系统
 
-<h1 align="center">Agentic RAG for Dummies</h1>
+一个面向中医方证、方剂、本草与古籍知识查询的工程化 RAG 项目。系统将口语症状映射到本地结构化证据，通过混合召回、必要症状与禁忌规则、Cross-Encoder 重排以及 LangGraph 工作流，输出一份可追溯的回答、澄清问题或无匹配提示。
 
-> Ubuntu/CUDA 服务器迁移、UTF-8、Qdrant 重建和 GPU 验收说明见 [docs/UBUNTU_CUDA_MIGRATION.md](docs/UBUNTU_CUDA_MIGRATION.md)。
+> 本项目用于知识检索、工程验证和技术演示，不构成诊断、处方或临床准确率声明。涉及个人健康和用药的问题，应咨询具备资质的专业人员。
 
-<p align="center">
-  <strong>Build a modular Agentic RAG system with LangGraph, conversation memory, and human-in-the-loop query clarification</strong>
-</p>
+![中医方证知识助手界面](assets/rerank_demo.png)
 
-<p align="center">
-  <a href="#overview">Overview</a> •
-  <a href="#how-it-works">How It Works</a> •
-  <a href="#llm-provider-configuration">LLM Providers</a> •
-  <a href="#implementation">Implementation</a> •
-  <a href="#installation--usage">Installation & Usage</a> •
-  <a href="#troubleshooting">Troubleshooting</a>
-</p>
+## 项目为什么这样做
 
-<p align="center">
-  <img src="https://img.shields.io/github/stars/GiovanniPasq/agentic-rag-for-dummies?style=social" alt="GitHub Stars"/>
-  <img src="https://img.shields.io/github/forks/GiovanniPasq/agentic-rag-for-dummies?style=social" alt="GitHub Forks"/>
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="License"/>
-  <a href="https://github.com/von-development/awesome-langgraph">
-    <img src="https://awesome.re/badge.svg" alt="Awesome LangGraph"/>
-  </a>
-</p>
+普通 RAG 对完整、明确的问题通常能够直接检索，但中医口语问法经常存在症状不完整、古今术语不一致、多个方证共享症状和禁忌冲突等问题。单纯依赖向量相似度，容易出现“语义很像但证据条件不成立”的结果。
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white" alt="Python"/>
-  <img src="https://img.shields.io/badge/LangGraph-1.1%2B-orange?logo=langchain&logoColor=white" alt="LangGraph"/>
-  <img src="https://img.shields.io/badge/Qdrant-vector%20db-DC244C" alt="Qdrant"/>
-  <img src="https://img.shields.io/badge/LLM%20Providers-Ollama%20%7C%20OpenAI%20%7C%20Anthropic%20%7C%20Google-purple" alt="LLM Providers"/>
-</p>
+本项目把问题拆成三个层次：
 
-<p align="center">
-  <a href="https://colab.research.google.com/github/GiovanniPasq/agentic-rag-for-dummies/blob/main/notebooks/agentic_rag.ipynb">
-    <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
-  </a>
-</p>
+1. **找得到**：用中文向量、词法匹配和结构化字段扩大候选召回。
+2. **排得对**：对前 8 条候选使用 `bge-reranker-v2-m3` 做查询—证据联合打分。
+3. **答得稳**：必要症状缺失时追问、出现禁忌冲突时拦截、证据不足时明确拒答，不让模型补齐知识库中不存在的结论。
 
-<p align="center">
-  <img alt="Agentic RAG Demo" src="assets/demo.gif" width="650px">
-</p>
+Agentic 并不是为了给每个请求增加大模型调用。确定性的中医方证查询优先走可回归的结构化链路；只有多轮上下文、问题改写、澄清、工具选择和多结果聚合等需要决策的环节，才交给 LangGraph 编排。
 
-<p align="center">
-  <strong>If you like this project, a star ⭐️ would mean a lot :)</strong><br>
-</p>
+## 已实现能力
 
-## Overview
+- **中医资料处理**：支持 Markdown/JSON/JSONL 清洗、UTF-8 校验、来源字段保留和结构化抽取。
+- **两类切分策略**：长篇古籍按 Markdown 标题构建父子块；方证记录按完整业务字段入库，不破坏必要症状、禁忌和原始出处之间的关系。
+- **混合召回**：`BGE-small-zh-v1.5` 向量召回结合本地词法匹配、结构化字段重叠和融合排序。
+- **语义重排**：在召回结果中选择前 8 条候选，使用 `bge-reranker-v2-m3` Cross-Encoder 重新排序。
+- **Evidence Gate**：检查必要症状组、禁忌冲突、证据覆盖度和共享症状歧义，决定回答、追问或拒答。
+- **Agentic 工作流**：LangGraph 负责会话摘要、查询改写、人工澄清中断、检索工具调用、上下文压缩、降级响应和答案聚合。
+- **固定回归评测**：保留问题集、金标准、逐案例预测和汇总报告，区分效果收益与性能成本。
+- **用户界面**：Gradio 页面只向用户展示一份经过重排和门控的最终回答；基线/Rerank 对比仅用于调试和评测。
 
-This repository demonstrates how to build an **Agentic RAG (Retrieval-Augmented Generation)** system using LangGraph with minimal code. Most RAG tutorials show basic concepts but lack guidance on building modular, agent-driven systems — this project bridges that gap by providing **both learning materials and an extensible architecture**.
-
-### GPU Rerank Evaluation and Demo
-
-The structured TCM retrieval path supports a safety-preserving second stage based on
-`BAAI/bge-reranker-v2-m3`. On an NVIDIA A100, a fixed-seed locked regression set with
-60 formulas and 221 synthetic hard-negative cases improved from **90.95%** to
-**95.02%** (+4.07 pp). A broader 150-formula/538-case run improved from **93.87%** to
-**96.47%**. Full-signature Recall@1 remained saturated at 100%.
+## 技术路线
 
 ```mermaid
 flowchart LR
-    Q["Colloquial symptom query"] --> T["Query normalization"]
-    T --> R["Dense + lexical retrieval"]
-    R --> H["Local evidence and safety gates"]
-    H --> X["bge-reranker-v2-m3"]
-    X --> D["Grounded answer / clarify / no match"]
+    Q["用户口语问题"] --> T["术语归一化 / Query Translator"]
+    T --> R["BGE-small-zh-v1.5 + 词法与字段混合召回"]
+    R --> G["Evidence Gate<br/>必要症状 / 禁忌 / 歧义"]
+    G --> X["Top-8<br/>bge-reranker-v2-m3"]
+    X --> D{"证据决策"}
+    D -->|证据充分| A["带来源的最终回答"]
+    D -->|信息不全| C["请求补充症状"]
+    D -->|冲突或无证据| N["拦截 / 无匹配"]
 ```
 
-Run the reproducible in-memory GPU A/B benchmark:
+### 结构化检索链路
 
-```bash
-CUDA_VISIBLE_DEVICES=2 .venv-linux/bin/python scripts/run_gpu_rerank_ab.py \
-  --device cuda \
-  --rerank-model models/bge-reranker-v2-m3
+`datasets/structured/syndrome_dictionary.jsonl` 的每条记录保留来源、原始证据、古今症状、别名、必要症状组、禁忌项、鉴别项和需追问字段。演示环境共加载 **1,419 条结构化证据**。
+
+检索时先获得较宽的候选集合，再执行以下约束：
+
+- 必要症状没有出现：不直接给出方证结论，转为追问；
+- 用户描述与禁忌字段冲突：保留冲突信息并拦截候选；
+- 多个方证共享相似症状：询问能区分候选的关键症状；
+- 本地证据无法支撑答案：返回无匹配提示，不调用模型自由补全。
+
+重排采用 `evidence_first` 模式：Evidence Gate 的业务约束保持最高优先级，Cross-Encoder 只负责改善合格候选的相对顺序，不能绕过禁忌或缺项规则。
+
+### 文档切分与上下文
+
+项目对不同数据采用不同策略，而不是全部按固定字数切块：
+
+- 古籍和长文档：先按 `H1/H2/H3` 切父块，再生成检索子块；当前配置为子块约 400 字符、重叠 80 字符，父块约 1,500–3,500 字符。
+- 方剂和方证：一条业务记录作为一个完整证据单元，避免组成、主治、禁忌、必要症状和出处被切散。
+- 回答阶段：子块用于准确召回，父块或完整结构化记录用于补足上下文；Agent 循环达到阈值后执行上下文压缩，避免重复证据持续占用窗口。
+
+### LangGraph 在项目中的作用
+
+LangGraph 不是向量数据库，也不负责计算相似度；它负责流程状态和条件路由：
+
+```text
+会话摘要 → 查询改写 → 是否需要澄清
+                    ├─ 是：中断并等待用户补充
+                    └─ 否：Agent 调用检索工具
+                            → 必要时压缩上下文或降级
+                            → 收集并聚合答案
 ```
 
-Run the private local demo on a non-public port:
+图中设置了工具调用次数、循环次数和递归上限，避免 Agent 无限制调用工具。稳定的方证演示页默认关闭 LLM 症状翻译器，优先验证本地证据链；完整 Agentic 界面可按需配置本地或云端 LLM。
+
+## 可复现评测结果
+
+### 221 条锁定黑盒回归集
+
+该回归集由 60 个方剂生成 221 条固定种子困难样本，并通过 Gradio API 测试真实页面边界，而不是绕过界面直接调用内部函数。
+
+| 场景 | 样本数 | 基线 | Rerank |
+|---|---:|---:|---:|
+| 完整方证 | 60 | 100.00% | 100.00% |
+| 必要症状缺失 | 60 | 98.33% | **100.00%** |
+| 禁忌冲突 | 41 | 95.12% | 95.12% |
+| 共享症状需澄清 | 60 | 71.67% | **85.00%** |
+| **工程回归总体通过率** | **221** | **90.95%** | **95.02%** |
+
+重排修复 10 条失败案例，同时产生 1 条退化，Top-1 变化 46 条。平均延迟从 582.00 ms 增至 725.51 ms，P95 从 843.10 ms 增至 1,088.90 ms，即增加约 **245.8 ms**。
+
+### 538 条扩展困难集
+
+在 150 个方剂、538 条合成困难样本上，总体通过率由 **93.87% 提升至 96.47%**，共享症状澄清由 **84.67% 提升至 93.33%**。
+
+这些数字是固定规则下的**工程回归通过率**，不是临床准确率。数据由本地词典和规则生成，尚未经过执业中医师独立盲审。完整方法、原始汇总和边界说明见：
+
+- [GPU Rerank 评测说明](docs/RERANK_GPU_EVALUATION.md)
+- [锁定黑盒评测报告](datasets/structured/rerank_locked_v1_api_results/report.json)
+- [服务器 GPU 实测与失败分析](docs/SERVER_GPU_RERANK_REPORT_20260629.md)
+
+## 项目结构
+
+```text
+.
+├── project/
+│   ├── core/                 # 检索、Query Translator、门控与 RAG 初始化
+│   ├── rag_agent/            # LangGraph 状态、节点、边和工具
+│   ├── db/                   # Qdrant 与父块存储适配
+│   ├── ui/                   # Gradio 页面与样式
+│   ├── app.py                # 完整 Agentic RAG 入口
+│   └── config.py             # 模型、分块、门控、端口等配置
+├── scripts/
+│   ├── rerank_gradio_demo.py # 中医方证用户界面与调试页
+│   ├── run_gpu_rerank_ab.py  # GPU 基线/Rerank A/B
+│   ├── evaluate_rerank_demo_api.py
+│   └── build_* / validate_*  # 数据构建与质量校验
+├── datasets/structured/      # 本地结构化字典与评测结果
+├── tests/evals/              # 固定回归问题集
+├── markdown_docs/            # 中医 Markdown 资料
+├── docs/                     # 数据、评测、迁移和问题分析
+└── requirements.txt
+```
+
+## 环境安装
+
+服务器验收环境为 Ubuntu、Python 3.10.12、PyTorch 2.11.0+cu128 和 NVIDIA A100。其他 CUDA/PyTorch 组合请按实际驱动安装兼容版本。
 
 ```bash
-CUDA_VISIBLE_DEVICES=2 \
-RERANK_DEMO_SERVER_NAME=127.0.0.1 \
-RERANK_DEMO_SERVER_PORT=17860 \
+python3 -m venv .venv-linux
+source .venv-linux/bin/activate
+python -m pip install --upgrade pip
+
+# 先从 PyTorch 官方源安装与服务器驱动匹配的 CUDA wheel
+pip install -r requirements.txt
+pip install pytest
+```
+
+`requirements.txt` 不固定 PyTorch 版本，避免在不同 GPU 驱动环境中误装不兼容的 CUDA wheel。
+
+### 本地模型和数据
+
+模型权重、Hugging Face 缓存和活动向量库不会提交到 Git。启动前需准备：
+
+```text
+models/bge-reranker-v2-m3/model.safetensors
+datasets/structured/syndrome_dictionary.jsonl
+```
+
+Embedding 默认使用 `BAAI/bge-small-zh-v1.5` 并以离线模式加载，可放入项目 Hugging Face 缓存，也可以通过环境变量 `DENSE_MODEL` 指向本地目录。
+
+## 启动中医方证界面
+
+先选择空闲 GPU 和未被占用的端口。以下编号和端口仅为示例：
+
+```bash
+export CUDA_VISIBLE_DEVICES=2
+export RERANK_DEMO_SERVER_NAME=127.0.0.1
+export RERANK_DEMO_SERVER_PORT=17860
+
 .venv-linux/bin/python scripts/rerank_gradio_demo.py
 ```
 
-See [GPU Rerank Evaluation](docs/RERANK_GPU_EVALUATION.md) for methodology,
-limitations, locked-regression-set instructions, and resume-safe claims.
+共享服务器不要直接暴露 Gradio。通过 SSH 隧道访问：
 
-![TCM syndrome rerank test page](assets/rerank_demo.png)
+```bash
+ssh -N -L 17860:127.0.0.1:17860 -p 8080 <user>@<server>
+```
 
-### What's inside
+本地浏览器打开 `http://127.0.0.1:17860/`。
 
-| Feature | Description |
+完整 LangGraph 界面入口为：
+
+```bash
+.venv-linux/bin/python project/app.py
+```
+
+该入口需要在 `project/.env` 或环境变量中配置 LLM 和 Qdrant。API Key、模型权重和个人配置均不应提交到仓库。
+
+## 运行评测
+
+### GPU A/B
+
+```bash
+export HF_HOME="$PWD/.cache/huggingface"
+export CUDA_VISIBLE_DEVICES=2
+
+.venv-linux/bin/python scripts/run_gpu_rerank_ab.py \
+  --device cuda \
+  --dictionary datasets/structured/syndrome_dictionary.jsonl \
+  --rerank-model models/bge-reranker-v2-m3 \
+  --max-formulas 150 \
+  --top-k 8 \
+  --rerank-candidates 8 \
+  --rerank-max-length 256 \
+  --rerank-mode evidence_first \
+  --output-dir datasets/structured/rerank_gpu_ab
+```
+
+### Gradio API 黑盒回归
+
+先启动 `rerank_gradio_demo.py`，再运行：
+
+```bash
+python scripts/evaluate_rerank_demo_api.py \
+  --url http://127.0.0.1:17860/ \
+  --questions tests/evals/rerank_locked_v1/questions.jsonl \
+  --gold tests/evals/rerank_locked_v1/private/gold_keys.jsonl \
+  --output-dir datasets/structured/rerank_locked_v1_api_results
+```
+
+评测器会逐案例保存进度，并对临时 HTTP/隧道异常重试，任务中断后可以继续执行。
+
+### 单元测试
+
+```bash
+.venv-linux/bin/python -m pytest -q
+```
+
+## 已解决的工程问题
+
+| 问题 | 定位与处理 |
 |---|---|
-| 🗂️ **Hierarchical Indexing** | Search small chunks for precision, retrieve large Parent chunks for context |
-| 🧠 **Conversation Memory** | Maintains context across questions for natural dialogue |
-| ❓ **Query Clarification** | Rewrites ambiguous queries or pauses to ask the user for details |
-| 🤖 **Agent Orchestration** | LangGraph coordinates the full retrieval and reasoning workflow |
-| 🔀 **Multi-Agent Map-Reduce** | Decomposes complex queries into parallel sub-queries |
-| ✅ **Self-Correction** | Re-queries automatically if initial results are insufficient |
-| 🗜️ **Context Compression** | Keeps working memory lean across long retrieval loops |
-| 🔍 **Observability** | Track LLM calls, tool usage, and graph execution with Langfuse |
+| Windows Qdrant 目录复制到 Linux 后不可用 | 不迁移活动数据库文件，使用原始结构化数据重新建索引。 |
+| NFS 上 Qdrant Local/SQLite 出现损坏和 I/O error | 演示与评测使用进程内 Qdrant；生产环境应使用独立 Qdrant 服务并把 storage 放在本地块存储。 |
+| 共享服务器无法稳定下载 Hugging Face 模型 | 模型和缓存放入项目私有目录，启动时启用 `local_files_only`。 |
+| Rerank 首次请求慢、延迟增加 | 服务启动时预热模型，只重排前 8 条候选，并同时记录平均/P95 延迟。 |
+| 排序变化不一定带来业务收益 | 建立固定回归集并逐案例记录收益与退化；Evidence Gate 不受重排分数绕过。 |
+| 用户问题缺项或知识库无答案时模型可能补全 | 必要症状、禁忌和证据覆盖度先做确定性判断；不满足时追问或拒答。 |
+| 多人服务器端口/GPU 冲突 | 使用 `CUDA_VISIBLE_DEVICES` 和独立端口隔离；服务仅监听 `127.0.0.1`，通过 SSH 隧道访问。 |
 
-### 🎯 Two Ways to Use This Repo
+## 已知限制
 
-**1️⃣ Learning Path: Interactive Notebook**
+- 当前 1,419 条证据索引在演示进程启动时重建，退出后不会持久化。
+- Rerank 会增加计算开销；锁定黑盒测试中 P95 增加约 245.8 ms，因此生产配置保持可开关，而不是无条件启用。
+- 早期 400 条规则集的基线已达到 100%，Rerank 没有提高通过率且存在名次退化；这说明“候选顺序变化”不能直接等同于业务效果提升。
+- 固定回归集主要用于防止工程退化，不能替代专业中医人员审核或真实用户验证。
+- PDF 文本型文档可先转为 Markdown；扫描版 PDF 仍需要额外 OCR 和人工版面校验。
+- 完整 Agentic 链路依赖所选 LLM 的工具调用和指令遵循能力；稳定演示链路不会把 LLM 当作唯一安全边界。
 
-Step-by-step tutorial perfect for understanding core concepts. Start here if you're new to Agentic RAG or want to experiment quickly.
+## 如何增加知识内容
 
-**2️⃣ Building Path: Modular Project**
+1. 确认资料来源、授权和可公开范围，不直接使用来源不明的医疗文本。
+2. 将内容转换为 UTF-8 Markdown/JSONL，保留 `source_file`、`source_url`、章节和原文证据。
+3. 长文档按标题和段落切分；方证、药物和禁忌信息按完整业务记录结构化。
+4. 运行字典构建、质量审计和 Qdrant 重建脚本。
+5. 为新增内容补充完整方证、缺项、禁忌冲突和共享症状等回归案例。
+6. 先比较基线与新方案的逐案例变化，再决定是否调整 Top-K、阈值或启用重排。
 
-Flexible architecture where each component can be independently swapped — LLM provider, embedding model, PDF converter, agent workflow. One line to switch from Ollama to Anthropic, OpenAI, or Google.
+不要直接把生成式模型的回答当作金标准。医疗领域的最终金标准应由独立、具备资质的专业人员审核。
 
-See [Modular Architecture](#modular-architecture) and [Installation & Usage](#installation--usage) to get started.
+## Git 提交边界
 
-## How It Works
+仓库应提交代码、配置示例、公开文档和可公开的汇总评测结果；以下内容通过 `.gitignore` 排除：
 
-### Document Preparation: Hierarchical Indexing
+- `.env`、API Key 和其他凭据；
+- Hugging Face 缓存、模型权重和 Qdrant 活动数据库；
+- 虚拟环境、运行日志、临时文件和生成式预测明细；
+- 个人简历、面试笔记和仅供内部使用的材料。
 
-Before queries can be processed, documents are split twice for optimal retrieval:
+## 开源来源与许可
 
-- **Parent Chunks**: Large sections based on Markdown headers (H1, H2, H3)
-- **Child Chunks**: Small, fixed-size pieces derived from parents
+本项目在 [Agentic RAG for Dummies](https://github.com/GiovanniPasq/agentic-rag-for-dummies) 的 LangGraph 模块化架构基础上，完成了中医数据管线、中文检索、证据门控、BGE 重排、固定回归评测、服务器部署和用户界面的场景化重构。
 
-> 💡 Optional: If you want to visually inspect or edit your chunks before indexing, you can use 🐿️ [**Chunky**](https://github.com/GiovanniPasq/chunky).
-
-This combines the **precision of small chunks** for search with the **contextual richness of large chunks** for answer generation.
-
----
-
-### Query Processing: Four-Stage Intelligent Workflow
-```
-User Query → Conversation Summary → Query Rewriting → Query Clarification →
-Parallel Agent Reasoning → Aggregation → Final Response
-```
-
-**Stage 1 — Conversation Understanding:** Analyzes recent history to extract context and maintain continuity across questions.
-
-**Stage 2 — Query Clarification:** Resolves references ("How do I update it?" → "How do I update SQL?"), splits multi-part questions into focused sub-queries, detects unclear inputs, and rewrites queries for optimal retrieval. Pauses for human input when clarification is needed.
-
-**Stage 3 — Intelligent Retrieval (Multi-Agent Map-Reduce):** Spawns parallel agent subgraphs — one per sub-query. Each agent searches child chunks, fetches parent chunks for context, self-corrects if results are insufficient, compresses context to avoid redundant fetches, and falls back gracefully if the search budget is exhausted.
-
-> **Example:** *"What is JavaScript? What is Python?"* → 2 parallel agents execute simultaneously.
-
-**Stage 4 — Response Generation:** Aggregates all agent responses into a single coherent answer.
-
----
-
-## LLM Provider Configuration
-
-This system is provider-agnostic — it supports any LLM provider available in [LangChain](https://python.langchain.com/docs/integrations/chat/), swappable in a single line. The examples below cover the most common options, but the same pattern applies to any other supported provider.
-
-> **Note:** Model names change frequently. Always check the official documentation for the latest available models and their identifiers before deploying.
-
-### Ollama (Local)
-
-```bash
-# Install Ollama from https://ollama.com
-ollama pull qwen3:4b-instruct-2507-q4_K_M
-```
-
-```python
-from langchain_ollama import ChatOllama
-
-llm = ChatOllama(model="qwen3:4b-instruct-2507-q4_K_M", temperature=0)
-```
-> ⚠️ For reliable tool calling and instruction following, prefer models **7B+**. Smaller models may ignore retrieval instructions or hallucinate. See [Troubleshooting](#troubleshooting).
-
----
-
-### Cloud Providers
-
-<details>
-<summary>Click to expand</summary>
-
-**OpenAI GPT:**
-```bash
-pip install -qU langchain-openai
-```
-```python
-from langchain_openai import ChatOpenAI
-import os
-
-os.environ["OPENAI_API_KEY"] = "your-api-key-here"
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-```
-
-**Anthropic Claude:**
-```bash
-pip install -qU langchain-anthropic
-```
-```python
-from langchain_anthropic import ChatAnthropic
-import os
-
-os.environ["ANTHROPIC_API_KEY"] = "your-api-key-here"
-llm = ChatAnthropic(model="claude-sonnet-4-5-20250929", temperature=0)
-```
-
-**Google Gemini**
-```bash
-pip install -qU langchain-google-genai
-```
-```python
-import os
-from langchain_google_genai import ChatGoogleGenerativeAI
-
-os.environ["GOOGLE_API_KEY"] = "your-api-key-here"
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
-```
-</details>
-
----
-
-## Implementation
-
-Additional details, extended explanations, and Langfuse observability (LLM call tracing, tool usage, and graph execution tracking) are available in the **[notebook](notebooks/agentic_rag.ipynb)** and in the full project.
-
-| Step | Description |
-|------|-------------|
-| 1 | [Initial Setup and Configuration](#step-1-initial-setup-and-configuration) |
-| 2 | [Configure Vector Database](#step-2-configure-vector-database) |
-| 3 | [PDFs to Markdown](#step-3-pdfs-to-markdown) |
-| 4 | [Hierarchical Document Indexing](#step-4-hierarchical-document-indexing) |
-| 5 | [Define Agent Tools](#step-5-define-agent-tools) |
-| 6 | [Define System Prompts](#step-6-define-system-prompts) |
-| 7 | [Define State and Data Models](#step-7-define-state-and-data-models) |
-| 8 | [Agent Configuration](#step-8-agent-configuration) |
-| 9 | [Build Graph Node and Edge Functions](#step-9-build-graph-node-and-edge-functions) |
-| 10 | [Build the LangGraph Graphs](#step-10-build-the-langgraph-graphs) |
-| 11 | [Create Chat Interface](#step-11-create-chat-interface) |
-
-### Step 1: Initial Setup and Configuration
-
-Define paths and initialize core components.
-
-```python
-import os
-from pathlib import Path
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_qdrant.fastembed_sparse import FastEmbedSparse
-from qdrant_client import QdrantClient
-
-DOCS_DIR = "docs"  # Directory containing your pdf files
-MARKDOWN_DIR = "markdown_docs" # Directory containing the pdfs converted to markdown
-PARENT_STORE_PATH = "parent_store"  # Directory for parent chunk JSON files
-CHILD_COLLECTION = "document_child_chunks"
-
-os.makedirs(DOCS_DIR, exist_ok=True)
-os.makedirs(MARKDOWN_DIR, exist_ok=True)
-os.makedirs(PARENT_STORE_PATH, exist_ok=True)
-
-from langchain_ollama import ChatOllama
-llm = ChatOllama(model="qwen3:4b-instruct-2507-q4_K_M", temperature=0)
-
-dense_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
-sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
-
-client = QdrantClient(path="qdrant_db")
-```
-
----
-
-### Step 2: Configure Vector Database
-
-Set up Qdrant to store child chunks with hybrid search capabilities.
-
-```python
-from qdrant_client.http import models as qmodels
-from langchain_qdrant import QdrantVectorStore
-from langchain_qdrant.qdrant import RetrievalMode
-
-embedding_dimension = len(dense_embeddings.embed_query("test"))
-
-def ensure_collection(collection_name):
-    if not client.collection_exists(collection_name):
-        client.create_collection(
-            collection_name=collection_name,
-            vectors_config=qmodels.VectorParams(
-                size=embedding_dimension,
-                distance=qmodels.Distance.COSINE
-            ),
-            sparse_vectors_config={
-                "sparse": qmodels.SparseVectorParams()
-            },
-        )
-```
-
----
-
-### Step 3: PDFs to Markdown
-
-Convert the PDFs to Markdown. For more details about other techniques use this companion [notebook](notebooks/pdf_to_markdown.ipynb).
-
-```python
-import os
-import pymupdf.layout
-import pymupdf4llm
-from pathlib import Path
-import glob
-
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-def pdf_to_markdown(pdf_path, output_dir):
-    doc = pymupdf.open(pdf_path)
-    md = pymupdf4llm.to_markdown(doc, header=False, footer=False, page_separators=True, ignore_images=True, write_images=False, image_path=None)
-    md_cleaned = md.encode('utf-8', errors='surrogatepass').decode('utf-8', errors='ignore')
-    output_path = Path(output_dir) / Path(doc.name).stem
-    Path(output_path).with_suffix(".md").write_bytes(md_cleaned.encode('utf-8'))
-
-def pdfs_to_markdowns(path_pattern, overwrite: bool = False):
-    output_dir = Path(MARKDOWN_DIR)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    for pdf_path in map(Path, glob.glob(path_pattern)):
-        md_path = (output_dir / pdf_path.stem).with_suffix(".md")
-        if overwrite or not md_path.exists():
-            pdf_to_markdown(pdf_path, output_dir)
-
-pdfs_to_markdowns(f"{DOCS_DIR}/*.pdf")
-```
-
----
-
-### Step 4: Hierarchical Document Indexing
-
-Process documents with the Parent/Child splitting strategy.
-```python
-import os
-import glob
-import json
-from pathlib import Path
-from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
-```
-
-<details>
-<summary>Parent & Child chunk processing functions</summary>
-
-```python
-def merge_small_parents(chunks, min_size):
-    if not chunks:
-        return []
-
-    merged, current = [], None
-
-    for chunk in chunks:
-        if current is None:
-            current = chunk
-        else:
-            current.page_content += "\n\n" + chunk.page_content
-            for k, v in chunk.metadata.items():
-                if k in current.metadata:
-                    current.metadata[k] = f"{current.metadata[k]} -> {v}"
-                else:
-                    current.metadata[k] = v
-
-        if len(current.page_content) >= min_size:
-            merged.append(current)
-            current = None
-
-    if current:
-        if merged:
-            merged[-1].page_content += "\n\n" + current.page_content
-            for k, v in current.metadata.items():
-                if k in merged[-1].metadata:
-                    merged[-1].metadata[k] = f"{merged[-1].metadata[k]} -> {v}"
-                else:
-                    merged[-1].metadata[k] = v
-        else:
-            merged.append(current)
-
-    return merged
-
-def split_large_parents(chunks, max_size, splitter):
-    split_chunks = []
-
-    for chunk in chunks:
-        if len(chunk.page_content) <= max_size:
-            split_chunks.append(chunk)
-        else:
-            large_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=max_size,
-                chunk_overlap=splitter._chunk_overlap
-            )
-            sub_chunks = large_splitter.split_documents([chunk])
-            split_chunks.extend(sub_chunks)
-
-    return split_chunks
-
-def clean_small_chunks(chunks, min_size):
-    cleaned = []
-
-    for i, chunk in enumerate(chunks):
-        if len(chunk.page_content) < min_size:
-            if cleaned:
-                cleaned[-1].page_content += "\n\n" + chunk.page_content
-                for k, v in chunk.metadata.items():
-                    if k in cleaned[-1].metadata:
-                        cleaned[-1].metadata[k] = f"{cleaned[-1].metadata[k]} -> {v}"
-                    else:
-                        cleaned[-1].metadata[k] = v
-            elif i < len(chunks) - 1:
-                chunks[i + 1].page_content = chunk.page_content + "\n\n" + chunks[i + 1].page_content
-                for k, v in chunk.metadata.items():
-                    if k in chunks[i + 1].metadata:
-                        chunks[i + 1].metadata[k] = f"{v} -> {chunks[i + 1].metadata[k]}"
-                    else:
-                        chunks[i + 1].metadata[k] = v
-            else:
-                cleaned.append(chunk)
-        else:
-            cleaned.append(chunk)
-
-    return cleaned
-```
-
-</details>
-
-```python
-if client.collection_exists(CHILD_COLLECTION):
-    client.delete_collection(CHILD_COLLECTION)
-    ensure_collection(CHILD_COLLECTION)
-else:
-    ensure_collection(CHILD_COLLECTION)
-
-child_vector_store = QdrantVectorStore(
-    client=client,
-    collection_name=CHILD_COLLECTION,
-    embedding=dense_embeddings,
-    sparse_embedding=sparse_embeddings,
-    retrieval_mode=RetrievalMode.HYBRID,
-    sparse_vector_name="sparse"
-)
-
-def index_documents():
-    headers_to_split_on = [("#", "H1"), ("##", "H2"), ("###", "H3")]
-    parent_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on, strip_headers=False)
-    child_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-
-    min_parent_size = 2000
-    max_parent_size = 4000
-
-    all_parent_pairs, all_child_chunks = [], []
-    md_files = sorted(glob.glob(os.path.join(MARKDOWN_DIR, "*.md")))
-
-    if not md_files:
-        return
-
-    for doc_path_str in md_files:
-        doc_path = Path(doc_path_str)
-        try:
-            with open(doc_path, "r", encoding="utf-8") as f:
-                md_text = f.read()
-        except Exception as e:
-            continue
-
-        parent_chunks = parent_splitter.split_text(md_text)
-        merged_parents = merge_small_parents(parent_chunks, min_parent_size)
-        split_parents = split_large_parents(merged_parents, max_parent_size, child_splitter)
-        cleaned_parents = clean_small_chunks(split_parents, min_parent_size)
-
-        for i, p_chunk in enumerate(cleaned_parents):
-            parent_id = f"{doc_path.stem}_parent_{i}"
-            p_chunk.metadata.update({"source": doc_path.stem + ".pdf", "parent_id": parent_id})
-            all_parent_pairs.append((parent_id, p_chunk))
-            children = child_splitter.split_documents([p_chunk])
-            all_child_chunks.extend(children)
-
-    if not all_child_chunks:
-        return
-
-    try:
-        child_vector_store.add_documents(all_child_chunks)
-    except Exception as e:
-        return
-
-    for item in os.listdir(PARENT_STORE_PATH):
-        os.remove(os.path.join(PARENT_STORE_PATH, item))
-
-    for parent_id, doc in all_parent_pairs:
-        doc_dict = {"page_content": doc.page_content, "metadata": doc.metadata}
-        filepath = os.path.join(PARENT_STORE_PATH, f"{parent_id}.json")
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(doc_dict, f, ensure_ascii=False, indent=2)
-
-index_documents()
-```
-
----
-
-### Step 5: Define Agent Tools
-
-Create the retrieval tools the agent will use.
-
-```python
-import json
-from typing import List
-from langchain_core.tools import tool
-
-@tool
-def search_child_chunks(query: str, limit: int) -> str:
-    """Search for the top K most relevant child chunks.
-
-    Args:
-        query: Search query string
-        limit: Maximum number of results to return
-    """
-    try:
-        results = child_vector_store.similarity_search(query, k=limit, score_threshold=0.7)
-        if not results:
-            return "NO_RELEVANT_CHUNKS"
-
-        return "\n\n".join([
-            f"Parent ID: {doc.metadata.get('parent_id', '')}\n"
-            f"File Name: {doc.metadata.get('source', '')}\n"
-            f"Content: {doc.page_content.strip()}"
-            for doc in results
-        ])
-
-    except Exception as e:
-        return f"RETRIEVAL_ERROR: {str(e)}"
-
-@tool
-def retrieve_parent_chunks(parent_id: str) -> str:
-    """Retrieve full parent chunks by their IDs.
-    
-    Args:
-        parent_id: Parent chunk ID to retrieve
-    """
-    file_name = parent_id if parent_id.lower().endswith(".json") else f"{parent_id}.json"
-    path = os.path.join(PARENT_STORE_PATH, file_name)
-
-    if not os.path.exists(path):
-        return "NO_PARENT_DOCUMENT"
-
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    return (
-        f"Parent ID: {parent_id}\n"
-        f"File Name: {data.get('metadata', {}).get('source', 'unknown')}\n"
-        f"Content: {data.get('page_content', '').strip()}"
-    )
-
-llm_with_tools = llm.bind_tools([search_child_chunks, retrieve_parent_chunks])
-```
-
----
-
-### Step 6: Define System Prompts
-
-Define the system prompts for conversation summarization, query rewriting, agent orchestration, context compression, fallback response, and answer aggregation.
-
-<details>
-<summary>Conversation Summary Prompt</summary>
-
-```python
-def get_conversation_summary_prompt() -> str:
-    return """You are an expert conversation summarizer.
-
-Your task is to create a brief 1-2 sentence summary of the conversation (max 30-50 words).
-
-Include:
-- Main topics discussed
-- Important facts or entities mentioned
-- Any unresolved questions if applicable
-- Sources file name (e.g., file1.pdf) or documents referenced
-
-Exclude:
-- Greetings, misunderstandings, off-topic content.
-
-Output:
-- Return ONLY the summary.
-- Do NOT include any explanations or justifications.
-- If no meaningful topics exist, return an empty string.
-"""
-```
-
-</details>
-
-<details>
-<summary>Query Rewrite Prompt</summary>
-
-```python
-def get_rewrite_query_prompt() -> str:
-    return """You are an expert query analyst and rewriter.
-
-Your task is to rewrite the current user query for optimal document retrieval, incorporating conversation context only when necessary.
-
-Rules:
-1. Self-contained queries:
-   - Always rewrite the query to be clear and self-contained
-   - If the query is a follow-up (e.g., "what about X?", "and for Y?"), integrate minimal necessary context from the summary
-   - Do not add information not present in the query or conversation summary
-
-2. Domain-specific terms:
-   - Product names, brands, proper nouns, or technical terms are treated as domain-specific
-   - For domain-specific queries, use conversation context minimally or not at all
-   - Use the summary only to disambiguate vague queries
-
-3. Grammar and clarity:
-   - Fix grammar, spelling errors, and unclear abbreviations
-   - Remove filler words and conversational phrases
-   - Preserve concrete keywords and named entities
-
-4. Multiple information needs:
-   - If the query contains multiple distinct, unrelated questions, split into separate queries (maximum 3)
-   - Each sub-query must remain semantically equivalent to its part of the original
-   - Do not expand, enrich, or reinterpret the meaning
-
-5. Failure handling:
-   - If the query intent is unclear or unintelligible, mark as "unclear"
-
-Input:
-- conversation_summary: A concise summary of prior conversation
-- current_query: The user's current query
-
-Output:
-- One or more rewritten, self-contained queries suitable for document retrieval
-"""
-```
-
-</details>
-
-<details>
-<summary>Orchestrator Prompt</summary>
-
-```python
-def get_orchestrator_prompt() -> str:
-    return """You are an expert retrieval-augmented assistant.
-
-Your task is to act as a researcher: search documents first, analyze the data, and then provide a comprehensive answer using ONLY the retrieved information.
-
-Rules:
-1. You MUST call 'search_child_chunks' before answering, unless the [COMPRESSED CONTEXT FROM PRIOR RESEARCH] already contains sufficient information.
-2. Ground every claim in the retrieved documents. If context is insufficient, state what is missing rather than filling gaps with assumptions.
-3. If no relevant documents are found, broaden or rephrase the query and search again. Repeat until satisfied or the operation limit is reached.
-
-Compressed Memory:
-When [COMPRESSED CONTEXT FROM PRIOR RESEARCH] is present —
-- Queries already listed: do not repeat them.
-- Parent IDs already listed: do not call `retrieve_parent_chunks` on them again.
-- Use it to identify what is still missing before searching further.
-
-Workflow:
-1. Check the compressed context. Identify what has already been retrieved and what is still missing.
-2. Search for 5-7 relevant excerpts using 'search_child_chunks' ONLY for uncovered aspects.
-3. If NONE are relevant, apply rule 3 immediately.
-4. For each relevant but fragmented excerpt, call 'retrieve_parent_chunks' ONE BY ONE — only for IDs not in the compressed context. Never retrieve the same ID twice.
-5. Once context is complete, provide a detailed answer omitting no relevant facts.
-6. Conclude with "---\n**Sources:**\n" followed by the unique file names.
-"""
-```
-
-</details>
-
-<details>
-<summary>Fallback Response Prompt</summary>
-
-```python
-def get_fallback_response_prompt() -> str:
-    return """You are an expert synthesis assistant. The system has reached its maximum research limit.
-
-Your task is to provide the most complete answer possible using ONLY the information provided below.
-
-Input structure:
-- "Compressed Research Context": summarized findings from prior search iterations — treat as reliable.
-- "Retrieved Data": raw tool outputs from the current iteration — prefer over compressed context if conflicts arise.
-Either source alone is sufficient if the other is absent.
-
-Rules:
-1. Source Integrity: Use only facts explicitly present in the provided context. Do not infer, assume, or add any information not directly supported by the data.
-2. Handling Missing Data: Cross-reference the USER QUERY against the available context.
-   Flag ONLY aspects of the user's question that cannot be answered from the provided data.
-   Do not treat gaps mentioned in the Compressed Research Context as unanswered
-   unless they are directly relevant to what the user asked.
-3. Tone: Professional, factual, and direct.
-4. Output only the final answer. Do not expose your reasoning, internal steps, or any meta-commentary about the retrieval process.
-5. Do NOT add closing remarks, final notes, disclaimers, summaries, or repeated statements after the Sources section.
-   The Sources section is always the last element of your response. Stop immediately after it.
-
-Formatting:
-- Use Markdown (headings, bold, lists) for readability.
-- Write in flowing paragraphs where possible.
-- Conclude with a Sources section as described below.
-
-Sources section rules:
-- Include a "---\\n**Sources:**\\n" section at the end, followed by a bulleted list of file names.
-- List ONLY entries that have a real file extension (e.g. ".pdf", ".docx", ".txt").
-- Any entry without a file extension is an internal chunk identifier — discard it entirely, never include it.
-- Deduplicate: if the same file appears multiple times, list it only once.
-- If no valid file names are present, omit the Sources section entirely.
-- THE SOURCES SECTION IS THE LAST THING YOU WRITE. Do not add anything after it.
-"""
-```
-
-</details>
-
-<details>
-<summary>Context Compression Prompt</summary>
-
-```python
-def get_context_compression_prompt() -> str:
-    return """You are an expert research context compressor.
-
-Your task is to compress retrieved conversation content into a concise, query-focused, and structured summary that can be directly used by a retrieval-augmented agent for answer generation.
-
-Rules:
-1. Keep ONLY information relevant to answering the user's question.
-2. Preserve exact figures, names, versions, technical terms, and configuration details.
-3. Remove duplicated, irrelevant, or administrative details.
-4. Do NOT include search queries, parent IDs, chunk IDs, or internal identifiers.
-5. Organize all findings by source file. Each file section MUST start with: ### filename.pdf
-6. Highlight missing or unresolved information in a dedicated "Gaps" section.
-7. Limit the summary to roughly 400-600 words. If content exceeds this, prioritize critical facts and structured data.
-8. Do not explain your reasoning; output only structured content in Markdown.
-
-Required Structure:
-
-# Research Context Summary
-
-## Focus
-[Brief technical restatement of the question]
-
-## Structured Findings
-
-### filename.pdf
-- Directly relevant facts
-- Supporting context (if needed)
-
-## Gaps
-- Missing or incomplete aspects
-
-The summary should be concise, structured, and directly usable by an agent to generate answers or plan further retrieval.
-"""
-```
-
-</details>
-
-<details>
-<summary>Aggregation Prompt</summary>
-
-```python
-def get_aggregation_prompt() -> str:
-    return """You are an expert aggregation assistant.
-
-Your task is to combine multiple retrieved answers into a single, comprehensive and natural response that flows well.
-
-Rules:
-1. Write in a conversational, natural tone - as if explaining to a colleague.
-2. Use ONLY information from the retrieved answers.
-3. Do NOT infer, expand, or interpret acronyms or technical terms unless explicitly defined in the sources.
-4. Weave together the information smoothly, preserving important details, numbers, and examples.
-5. Be comprehensive - include all relevant information from the sources, not just a summary.
-6. If sources disagree, acknowledge both perspectives naturally (e.g., "While some sources suggest X, others indicate Y...").
-7. Start directly with the answer - no preambles like "Based on the sources...".
-
-Formatting:
-- Use Markdown for clarity (headings, lists, bold) but don't overdo it.
-- Write in flowing paragraphs where possible rather than excessive bullet points.
-- Conclude with a Sources section as described below.
-
-Sources section rules:
-- Each retrieved answer may contain a "Sources" section — extract the file names listed there.
-- List ONLY entries that have a real file extension (e.g. ".pdf", ".docx", ".txt").
-- Any entry without a file extension is an internal chunk identifier — discard it entirely, never include it.
-- Deduplicate: if the same file appears across multiple answers, list it only once.
-- Format as "---\\n**Sources:**\\n" followed by a bulleted list of the cleaned file names.
-- File names must appear ONLY in this final Sources section and nowhere else in the response.
-- If no valid file names are present, omit the Sources section entirely.
-
-If there's no useful information available, simply say: "I couldn't find any information to answer your question in the available sources."
-"""
-```
-
-</details>
-
----
-
-### Step 7: Define State and Data Models
-
-Create the state structure for conversation tracking and agent execution.
-
-```python
-from langgraph.graph import MessagesState
-from pydantic import BaseModel, Field
-from typing import List, Annotated, Set
-import operator
-
-def accumulate_or_reset(existing: List[dict], new: List[dict]) -> List[dict]:
-    if new and any(item.get('__reset__') for item in new):
-        return []
-    return existing + new
-
-def set_union(a: Set[str], b: Set[str]) -> Set[str]:
-    return a | b
-
-class State(MessagesState):
-    questionIsClear: bool = False
-    conversation_summary: str = ""
-    originalQuery: str = ""
-    rewrittenQuestions: List[str] = []
-    agent_answers: Annotated[List[dict], accumulate_or_reset] = []
-
-class AgentState(MessagesState):
-    tool_call_count: Annotated[int, operator.add] = 0
-    iteration_count: Annotated[int, operator.add] = 0
-    question: str = ""
-    question_index: int = 0
-    context_summary: str = ""
-    retrieval_keys: Annotated[Set[str], set_union] = set()
-    final_answer: str = ""
-    agent_answers: List[dict] = []
-
-class QueryAnalysis(BaseModel):
-    is_clear: bool = Field(description="Indicates if the user's question is clear and answerable.")
-    questions: List[str] = Field(description="List of rewritten, self-contained questions.")
-    clarification_needed: str = Field(description="Explanation if the question is unclear.")
-```
-
----
-
-### Step 8: Agent Configuration
-
-Hard limits on tool calls and iterations prevent infinite loops. Token counting (via `tiktoken`) drives context compression decisions.
-
-```python
-import tiktoken
-
-MAX_TOOL_CALLS = 8       # Maximum tool calls per agent run
-MAX_ITERATIONS = 10      # Maximum agent loop iterations
-BASE_TOKEN_THRESHOLD = 2000     # Initial token threshold for compression
-TOKEN_GROWTH_FACTOR = 0.9       # Multiplier applied after each compression
-
-def estimate_context_tokens(messages: list) -> int:
-    try:
-        encoding = tiktoken.encoding_for_model("gpt-4")
-    except:
-        encoding = tiktoken.get_encoding("cl100k_base")
-    return sum(len(encoding.encode(str(msg.content))) for msg in messages if hasattr(msg, 'content') and msg.content)
-```
-
----
-
-### Step 9: Build Graph Node and Edge Functions
-
-Create the processing nodes and edges for the LangGraph workflow.
-
-#### Main Graph Nodes & Edges
-```python
-from langgraph.types import Send, Command
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, RemoveMessage, ToolMessage
-from typing import Literal
-
-def summarize_history(state: State):
-    if len(state["messages"]) < 4:
-        return {"conversation_summary": ""}
-
-    relevant_msgs = [
-        msg for msg in state["messages"][:-1]
-        if isinstance(msg, (HumanMessage, AIMessage)) and not getattr(msg, "tool_calls", None)
-    ]
-
-    if not relevant_msgs:
-        return {"conversation_summary": ""}
-
-    conversation = "Conversation history:\n"
-    for msg in relevant_msgs[-6:]:
-        role = "User" if isinstance(msg, HumanMessage) else "Assistant"
-        conversation += f"{role}: {msg.content}\n"
-
-    summary_response = llm.with_config(temperature=0.2).invoke([SystemMessage(content=get_conversation_summary_prompt()), HumanMessage(content=conversation)])
-    return {"conversation_summary": summary_response.content, "agent_answers": [{"__reset__": True}]}
-
-def rewrite_query(state: State):
-    last_message = state["messages"][-1]
-    conversation_summary = state.get("conversation_summary", "")
-
-    context_section = (f"Conversation Context:\n{conversation_summary}\n" if conversation_summary.strip() else "") + f"User Query:\n{last_message.content}\n"
-
-    llm_with_structure = llm.with_config(temperature=0.1).with_structured_output(QueryAnalysis)
-    response = llm_with_structure.invoke([SystemMessage(content=get_rewrite_query_prompt()), HumanMessage(content=context_section)])
-
-    if response.questions and response.is_clear:
-        delete_all = [RemoveMessage(id=m.id) for m in state["messages"] if not isinstance(m, SystemMessage)]
-        return {"questionIsClear": True, "messages": delete_all, "originalQuery": last_message.content, "rewrittenQuestions": response.questions}
-
-    clarification = response.clarification_needed if response.clarification_needed and len(response.clarification_needed.strip()) > 10 else "I need more information to understand your question."
-    return {"questionIsClear": False, "messages": [AIMessage(content=clarification)]}
-
-def request_clarification(state: State):
-    return {}
-
-def route_after_rewrite(state: State) -> Literal["request_clarification", "agent"]:
-    if not state.get("questionIsClear", False):
-        return "request_clarification"
-    else:
-        return [
-                Send("agent", {"question": query, "question_index": idx, "messages": []})
-                for idx, query in enumerate(state["rewrittenQuestions"])
-            ]
-
-def aggregate_answers(state: State):
-    if not state.get("agent_answers"):
-        return {"messages": [AIMessage(content="No answers were generated.")]}
-
-    sorted_answers = sorted(state["agent_answers"], key=lambda x: x["index"])
-
-    formatted_answers = ""
-    for i, ans in enumerate(sorted_answers, start=1):
-        formatted_answers += (f"\nAnswer {i}:\n"f"{ans['answer']}\n")
-
-    user_message = HumanMessage(content=f"""Original user question: {state["originalQuery"]}\nRetrieved answers:{formatted_answers}""")
-    synthesis_response = llm.invoke([SystemMessage(content=get_aggregation_prompt()), user_message])
-    return {"messages": [AIMessage(content=synthesis_response.content)]}
-```
-
----
-
-#### Agent Subgraph Nodes & Edges
-```python
-def orchestrator(state: AgentState):
-    context_summary = state.get("context_summary", "").strip()
-    sys_msg = SystemMessage(content=get_orchestrator_prompt())
-    summary_injection = (
-        [HumanMessage(content=f"[COMPRESSED CONTEXT FROM PRIOR RESEARCH]\n\n{context_summary}")]
-        if context_summary else []
-    )
-    if not state.get("messages"):
-        human_msg = HumanMessage(content=state["question"])
-        force_search = HumanMessage(content="YOU MUST CALL 'search_child_chunks' AS THE FIRST STEP TO ANSWER THIS QUESTION.")
-        response = llm_with_tools.invoke([sys_msg] + summary_injection + [human_msg, force_search])
-        return {"messages": [human_msg, response], "tool_call_count": len(response.tool_calls or []), "iteration_count": 1}
-
-    response = llm_with_tools.invoke([sys_msg] + summary_injection + state["messages"])
-    tool_calls = response.tool_calls if hasattr(response, "tool_calls") else []
-    return {"messages": [response], "tool_call_count": len(tool_calls) if tool_calls else 0, "iteration_count": 1}
-
-def route_after_orchestrator_call(state: AgentState) -> Literal["tool", "fallback_response", "collect_answer"]:
-    iteration = state.get("iteration_count", 0)
-    tool_count = state.get("tool_call_count", 0)
-
-    if iteration >= MAX_ITERATIONS or tool_count > MAX_TOOL_CALLS:
-        return "fallback_response"
-
-    last_message = state["messages"][-1]
-    tool_calls = getattr(last_message, "tool_calls", None) or []
-
-    if not tool_calls:
-        return "collect_answer"
-    
-    return "tools"
-
-def fallback_response(state: AgentState):
-    seen = set()
-    unique_contents = []
-    for m in state["messages"]:
-        if isinstance(m, ToolMessage) and m.content not in seen:
-            unique_contents.append(m.content)
-            seen.add(m.content)
-
-    context_summary = state.get("context_summary", "").strip()
-
-    context_parts = []
-    if context_summary:
-        context_parts.append(f"## Compressed Research Context (from prior iterations)\n\n{context_summary}")
-    if unique_contents:
-        context_parts.append(
-            "## Retrieved Data (current iteration)\n\n" +
-            "\n\n".join(f"--- DATA SOURCE {i} ---\n{content}" for i, content in enumerate(unique_contents, 1))
-        )
-
-    context_text = "\n\n".join(context_parts) if context_parts else "No data was retrieved from the documents."
-
-    prompt_content = (
-        f"USER QUERY: {state.get('question')}\n\n"
-        f"{context_text}\n\n"
-        f"INSTRUCTION:\nProvide the best possible answer using only the data above."
-    )
-    response = llm.invoke([SystemMessage(content=get_fallback_response_prompt()), HumanMessage(content=prompt_content)])
-    return {"messages": [response]}
-
-def should_compress_context(state: AgentState) -> Command[Literal["compress_context", "orchestrator"]]:
-    messages = state["messages"]
-
-    new_ids: Set[str] = set()
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
-            for tc in msg.tool_calls:
-                if tc["name"] == "retrieve_parent_chunks":
-                    raw = tc["args"].get("parent_id") or tc["args"].get("id") or tc["args"].get("ids") or []
-                    if isinstance(raw, str):
-                        new_ids.add(f"parent::{raw}")
-                    else:
-                        new_ids.update(f"parent::{r}" for r in raw)
-
-                elif tc["name"] == "search_child_chunks":
-                    query = tc["args"].get("query", "")
-                    if query:
-                        new_ids.add(f"search::{query}")
-            break
-
-    updated_ids = state.get("retrieval_keys", set()) | new_ids
-
-    current_token_messages = estimate_context_tokens(messages)
-    current_token_summary = estimate_context_tokens([HumanMessage(content=state.get("context_summary", ""))])
-    current_tokens = current_token_messages + current_token_summary
-
-    max_allowed = BASE_TOKEN_THRESHOLD + int(current_token_summary * TOKEN_GROWTH_FACTOR)
-
-    goto = "compress_context" if current_tokens > max_allowed else "orchestrator"
-    return Command(update={"retrieval_keys": updated_ids}, goto=goto)
-
-def compress_context(state: AgentState):
-    messages = state["messages"]
-    existing_summary = state.get("context_summary", "").strip()
-
-    if not messages:
-        return {}
-
-    conversation_text = f"USER QUESTION:\n{state.get('question')}\n\nConversation to compress:\n\n"
-    if existing_summary:
-        conversation_text += f"[PRIOR COMPRESSED CONTEXT]\n{existing_summary}\n\n"
-
-    for msg in messages[1:]:
-        if isinstance(msg, AIMessage):
-            tool_calls_info = ""
-            if getattr(msg, "tool_calls", None):
-                calls = ", ".join(f"{tc['name']}({tc['args']})" for tc in msg.tool_calls)
-                tool_calls_info = f" | Tool calls: {calls}"
-            conversation_text += f"[ASSISTANT{tool_calls_info}]\n{msg.content or '(tool call only)'}\n\n"
-        elif isinstance(msg, ToolMessage):
-            tool_name = getattr(msg, "name", "tool")
-            conversation_text += f"[TOOL RESULT — {tool_name}]\n{msg.content}\n\n"
-
-    summary_response = llm.invoke([SystemMessage(content=get_context_compression_prompt()), HumanMessage(content=conversation_text)])
-    new_summary = summary_response.content
-
-    retrieved_ids: Set[str] = state.get("retrieval_keys", set())
-    if retrieved_ids:
-        parent_ids = sorted(r for r in retrieved_ids if r.startswith("parent::"))
-        search_queries = sorted(r.replace("search::", "") for r in retrieved_ids if r.startswith("search::"))
-
-        block = "\n\n---\n**Already executed (do NOT repeat):**\n"
-        if parent_ids:
-            block += "Parent chunks retrieved:\n" + "\n".join(f"- {p.replace('parent::', '')}" for p in parent_ids) + "\n"
-        if search_queries:
-            block += "Search queries already run:\n" + "\n".join(f"- {q}" for q in search_queries) + "\n"
-        new_summary += block
-
-    return {"context_summary": new_summary, "messages": [RemoveMessage(id=m.id) for m in messages[1:]]}
-
-def collect_answer(state: AgentState):
-    last_message = state["messages"][-1]
-    is_valid = isinstance(last_message, AIMessage) and last_message.content and not last_message.tool_calls
-    answer = last_message.content if is_valid else "Unable to generate an answer."
-    return {
-        "final_answer": answer,
-        "agent_answers": [{"index": state["question_index"], "question": state["question"], "answer": answer}]
-    }
-```
-
-**Why this architecture?**
-- **Summarization** maintains conversational context without overwhelming the LLM
-- **Query rewriting** ensures search queries are precise and unambiguous, using context intelligently
-- **Human-in-the-loop** catches unclear queries before wasting any retrieval resources
-- **Parallel execution** via `Send` API spawns independent agent subgraphs for each sub-question simultaneously
-- **Context compression** keeps the agent's working memory lean across long retrieval loops, preventing redundant fetches
-- **Fallback response** ensures graceful degradation — the agent always returns something useful even when the budget runs out
-- **Answer collection & aggregation** extracts clean final answers from agents and aggregates them into a single coherent response
----
-
-### Step 10: Build the LangGraph Graphs
-
-Assemble the complete workflow graph with conversation memory and multi-agent architecture.
-
-```python
-from langgraph.graph import START, END, StateGraph
-from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.memory import InMemorySaver
-
-checkpointer = InMemorySaver()
-
-agent_builder = StateGraph(AgentState)
-agent_builder.add_node(orchestrator)
-agent_builder.add_node("tools", ToolNode([search_child_chunks, retrieve_parent_chunks]))
-agent_builder.add_node(compress_context)
-agent_builder.add_node(fallback_response)
-agent_builder.add_node(should_compress_context)
-agent_builder.add_node(collect_answer)
-
-agent_builder.add_edge(START, "orchestrator")
-agent_builder.add_conditional_edges("orchestrator", route_after_orchestrator_call, {"tools": "tools", "fallback_response": "fallback_response", "collect_answer": "collect_answer"})
-agent_builder.add_edge("tools", "should_compress_context")
-agent_builder.add_edge("compress_context", "orchestrator")
-agent_builder.add_edge("fallback_response", "collect_answer")
-agent_builder.add_edge("collect_answer", END)
-agent_subgraph = agent_builder.compile()
-
-graph_builder = StateGraph(State)
-graph_builder.add_node(summarize_history)
-graph_builder.add_node(rewrite_query)
-graph_builder.add_node(request_clarification)
-graph_builder.add_node("agent", agent_subgraph)
-graph_builder.add_node(aggregate_answers)
-
-graph_builder.add_edge(START, "summarize_history")
-graph_builder.add_edge("summarize_history", "rewrite_query")
-graph_builder.add_conditional_edges("rewrite_query", route_after_rewrite)
-graph_builder.add_edge("request_clarification", "rewrite_query")
-graph_builder.add_edge(["agent"], "aggregate_answers")
-graph_builder.add_edge("aggregate_answers", END)
-
-agent_graph = graph_builder.compile(checkpointer=checkpointer, interrupt_before=["request_clarification"])
-```
-
-**Graph architecture explained:**
-
-The architecture flow diagram can be viewed **[here](./assets/agentic_rag_workflow.png)**.
-
-**Agent Subgraph** (processes individual questions):
-- START → `orchestrator` (invoke LLM with tools)
-- `orchestrator` → `tools` (if tool calls needed) OR `fallback_response` (if budget exhausted) OR `collect_answer` (if done)
-- `tools` → `should_compress_context` (check token budget)
-- `should_compress_context` → `compress_context` (if threshold exceeded) OR `orchestrator` (otherwise)
-- `compress_context` → `orchestrator` (resume with compressed memory)
-- `fallback_response` → `collect_answer` (package best-effort answer)
-- `collect_answer` → END (clean final answer with index)
-
-**Main Graph** (orchestrates complete workflow):
-- START → `summarize_history` (extract conversation context from history)
-- `summarize_history` → `rewrite_query` (rewrite query with context, check clarity)
-- `rewrite_query` → `request_clarification` (if unclear) OR spawn parallel `agent` subgraphs via `Send` (if clear)
-- `request_clarification` → `rewrite_query` (after user provides clarification)
-- All `agent` subgraphs → `aggregate_answers` (merge all responses)
-- `aggregate_answers` → END (return final synthesized answer)
-
----
-
-### Step 11: Create Chat Interface
-
-Build a Gradio interface with conversation persistence and human-in-the-loop support. For a complete end-to-end pipeline Gradio interface, including document ingestion, please refer to [project/README.md](./project/README.md).
-
-> **Note:** Full streaming support — including reasoning steps and tool calls visibility — is implemented in the [notebook](notebooks/agentic_rag.ipynb) and in the full [project](project/core/chat_interface.py). The example below is intentionally minimal — it shows the basic Gradio integration pattern only.
-
-```python
-import gradio as gr
-import uuid
-
-def create_thread_id():
-    """Generate a unique thread ID for each conversation"""
-    return {"configurable": {"thread_id": str(uuid.uuid4())}, "recursion_limit": 50}
-
-def clear_session():
-    """Clear thread for new conversation"""
-    global config
-    agent_graph.checkpointer.delete_thread(config["configurable"]["thread_id"])
-    config = create_thread_id()
-
-def chat(message, history):
-    current_state = agent_graph.get_state(config)
-    
-    if current_state.next:
-        agent_graph.update_state(config,{"messages": [HumanMessage(content=message.strip())]})
-        result = agent_graph.invoke(None, config)
-    else:
-        result = agent_graph.invoke({"messages": [HumanMessage(content=message.strip())]}, config)
-    
-    return result['messages'][-1].content
-
-config = create_thread_id()
-
-with gr.Blocks() as demo:
-    chatbot = gr.Chatbot()
-    chatbot.clear(clear_session)
-    gr.ChatInterface(fn=chat, chatbot=chatbot)
-
-demo.launch(theme=gr.themes.Citrus())
-```
-
-**You're done!** You now have a fully functional Agentic RAG system with conversation memory, hierarchical indexing, and human-in-the-loop query clarification.
-
----
-
-## Modular Architecture
-
-The app (`project/` folder) is organized into modular components — each independently swappable without breaking the system.
-
-### 📂 Project Structure
-```
-project/
-├── app.py                    # Main Gradio application entry point
-├── config.py                 # Configuration hub (models, chunk sizes, providers)
-├── core/                     # RAG system orchestration
-├── db/                       # Vector DB and parent chunk storage
-├── rag_agent/                # LangGraph workflow (nodes, edges, prompts, tools)
-└── ui/                       # Gradio interface
-```
-
-Key customization points: LLM provider, embedding model, chunking strategy, agent workflow, and system prompts — all configurable via `config.py` or their respective modules.
-
-Full documentation in [project/README.md](./project/README.md).
-
-## Installation & Usage
-
-Sample pdf files can be found here: [javascript](https://www.tutorialspoint.com/javascript/javascript_tutorial.pdf), [blockchain](https://blockchain-observatory.ec.europa.eu/document/download/1063effa-59cc-4df4-aeee-d2cf94f69178_en?filename=Blockchain_For_Beginners_A_EUBOF_Guide.pdf), [microservices](https://cdn.studio.f5.com/files/k6fem79d/production/5e4126e1cefa813ab67f9c0b6d73984c27ab1502.pdf), [fortinet](https://www.commoncriteriaportal.org/files/epfiles/Fortinet%20FortiGate_EAL4_ST_V1.5.pdf(320893)_TMP.pdf).
-
-### Option 1: Quickstart Notebook (Recommended for Testing)
-
-**Google Colab:** Click the **Open in Colab** badge at the top of this README, upload your PDFs to a `docs/` folder in the file browser, install dependencies with `pip install -r requirements.txt`, then run all cells top to bottom.
-
-**Local (Jupyter/VSCode):** Optionally create and activate a virtual environment, install dependencies with `pip install -r requirements.txt`, add your PDFs to `docs/`, then run all cells top to bottom.
-
-The chat interface will appear at the end.
-
-### Option 2: Full Python Project (Recommended for Development)
-
-#### 1. Install Dependencies
-```bash
-# Clone the repository
-git clone https://github.com/GiovanniPasq/agentic-rag-for-dummies
-cd agentic-rag-for-dummies
-
-# Optional: create and activate a virtual environment
-
-# macOS/Linux
-python -m venv .venv && source .venv/bin/activate
-
-# Windows
-python -m venv .venv && .\.venv\Scripts\activate
-
-# Install packages
-pip install -r requirements.txt
-```
-
-#### 2. Run the Application
-```bash
-python project/app.py
-```
-
-#### 3. Ask Questions
-
-Open the local URL (e.g., `http://127.0.0.1:7860`) to start chatting.
-
----
-
-### Option 3: Docker Deployment
-
-See [`project/README.md`](./project/README.md#Docker-Deployment) for full Docker instructions and system requirements.
-
-### Example Conversations
-
-**With Conversation Memory:**
-```
-User: "How do I install SQL?"
-Agent: [Provides installation steps from documentation]
-
-User: "How do I update it?"
-Agent: [Understands "it" = SQL, provides update instructions]
-```
-
-**With Query Clarification:**
-```
-User: "Tell me about that thing"
-Agent: "I need more information. What specific topic are you asking about?"
-
-User: "The installation process for PostgreSQL"
-Agent: [Retrieves and answers with specific information]
-```
-
----
-
-## Troubleshooting
-
-| Area | Common Problems | Suggested Solutions |
-|------|----------------|------------------|
-| **Model Selection** | - Responses ignore instructions<br>- Tools (retrieval/search) used incorrectly<br>- Poor context understanding<br>- Hallucinations or incomplete aggregation | - Use more capable LLMs<br>- Prefer models 7B+ for better reasoning<br>- Consider cloud-based models if local models are limited |
-| **System Prompt Behavior** | - Model answers without retrieving documents<br>- Query rewriting loses context<br>- Aggregation introduces hallucinations | - Make retrieval explicit in system prompts<br>- Keep query rewriting close to user intent |
-| **Retrieval Configuration** | - Relevant documents not retrieved<br>- Too much irrelevant information | - Increase retrieved chunks (`k`) or lower similarity thresholds to improve recall<br>- Reduce `k` or increase thresholds to improve precision |
-| **Chunk Size / Document Splitting** | - Answers lack context or feel fragmented<br>- Retrieval is slow or embedding costs are high | - Increase chunk & parent sizes for more context<br>- Decrease chunk sizes to improve speed and reduce costs |
-| **Context Compression** | - Agent loses important details after compression<br>- Compressed summaries are too vague | - Tune the compression system prompt<br>- Increase `BASE_TOKEN_THRESHOLD` to delay compression<br>- Increase `TOKEN_GROWTH_FACTOR` |
-| **Agent Configuration** | - Agent gives up too early <br>- Agent loops too long| - Increase `MAX_TOOL_CALLS` / `MAX_ITERATIONS` for complex queries<br>- Decrease them to speed up simple queries |
-| **Temperature & Consistency** | - Responses inconsistent or overly creative<br>- Responses too rigid or repetitive | - Set temperature to `0` for factual, consistent output<br>- Slightly increase temperature for summarization or analysis tasks |
-| **Embedding Model Quality** | - Poor semantic search<br>- Weak performance on domain-specific or multilingual docs | - Use higher-quality or domain-specific embeddings<br>- Re-index all documents after changing embeddings |
-
-> 💡 **For additional troubleshooting tips** see the [README Troubleshooting](./project/README.md#troubleshooting).
+代码许可见 [LICENSE](LICENSE)。第三方数据集和中医资料仍遵循各自来源的授权与使用条款，代码开源不等于自动获得所有数据的再分发权。
