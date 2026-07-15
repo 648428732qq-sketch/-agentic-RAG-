@@ -1,5 +1,5 @@
+import os
 import uuid
-from langchain_ollama import ChatOllama
 import config
 from db.vector_db_manager import VectorDbManager
 from db.parent_store_manager import ParentStoreManager
@@ -7,6 +7,44 @@ from document_chunker import DocumentChuncker
 from rag_agent.tools import ToolFactory
 from rag_agent.graph import create_agent_graph
 from core.observability import Observability
+
+
+def _create_llm():
+    """根据 ACTIVE_LLM_CONFIG 创建对应的 LLM 实例"""
+    active = config.ACTIVE_LLM_CONFIG
+    cfg = config.LLM_CONFIGS.get(active)
+    if not cfg:
+        raise ValueError(f"不支持的 LLM 提供商: {active}")
+
+    model = cfg["model"]
+    temperature = cfg["temperature"]
+    model_kwargs = cfg.get("model_kwargs", {})
+
+    if active == "ollama":
+        from langchain_ollama import ChatOllama
+        return ChatOllama(model=model, temperature=temperature)
+    elif active == "openai":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(model=model, temperature=temperature)
+    elif active == "deepseek":
+        from langchain_openai import ChatOpenAI
+        class DeepSeekChatOpenAI(ChatOpenAI):
+            def bind_tools(self, tools, **kwargs):
+                return super().bind_tools(tools, strict=False, **kwargs)
+        return DeepSeekChatOpenAI(
+            model=model, temperature=temperature,
+            base_url="https://api.deepseek.com",
+            api_key=os.environ.get("DEEPSEEK_API_KEY", "")
+        )
+    elif active == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(model=model, temperature=temperature)
+    elif active == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        return ChatGoogleGenerativeAI(model=model, temperature=temperature)
+    else:
+        raise ValueError(f"不支持的 LLM 提供商: {active}")
+
 
 class RAGSystem:
 
@@ -24,7 +62,8 @@ class RAGSystem:
         self.vector_db.create_collection(self.collection_name)
         collection = self.vector_db.get_collection(self.collection_name)
 
-        llm = ChatOllama(model=config.LLM_MODEL, temperature=config.LLM_TEMPERATURE)
+        llm = _create_llm()
+        print(f"  LLM 提供商: {config.ACTIVE_LLM_CONFIG} | 模型: {llm.model_name}")
         tools = ToolFactory(collection).create_tools()
         self.agent_graph = create_agent_graph(llm, tools)
 

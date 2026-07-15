@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "mode": "gradio_api_black_box_locked_eval",
+  "url": "http://127.0.0.1:17860/",
+  "wall_clock_seconds": 501.73,
+  "baseline": {
+    "case_count": 221,
+    "passed": 201,
+    "pass_rate": 0.9095,
+    "by_style": {
+      "forbidden_conflict": {
+        "count": 41,
+        "passed": 39,
+        "pass_rate": 0.9512
+      },
+      "full_signature_topk": {
+        "count": 60,
+        "passed": 60,
+        "pass_rate": 1.0
+      },
+      "missing_required_clarify": {
+        "count": 60,
+        "passed": 59,
+        "pass_rate": 0.9833
+      },
+      "shared_terms_clarify": {
+        "count": 60,
+        "passed": 43,
+        "pass_rate": 0.7167
+      }
+    },
+    "failure_counts": {
+      "shared_terms_clarify.not_grounded": 17,
+      "forbidden_conflict.target_filtered_or_conflicted": 2,
+      "forbidden_conflict.target_not_top1": 1,
+      "shared_terms_clarify.has_competing_context": 1,
+      "missing_required_clarify.not_grounded": 1
+    },
+    "latency_ms": {
+      "average": 582.0,
+      "p95": 843.1,
+      "max": 4938.8
+    }
+  },
+  "rerank": {
+    "case_count": 221,
+    "passed": 210,
+    "pass_rate": 0.9502,
+    "by_style": {
+      "forbidden_conflict": {
+        "count": 41,
+        "passed": 39,
+        "pass_rate": 0.9512
+      },
+      "full_signature_topk": {
+        "count": 60,
+        "passed": 60,
+        "pass_rate": 1.0
+      },
+      "missing_required_clarify": {
+        "count": 60,
+        "passed": 60,
+        "pass_rate": 1.0
+      },
+      "shared_terms_clarify": {
+        "count": 60,
+        "passed": 51,
+        "pass_rate": 0.85
+      }
+    },
+    "failure_counts": {
+      "shared_terms_clarify.not_grounded": 9,
+      "forbidden_conflict.target_filtered_or_conflicted": 2,
+      "forbidden_conflict.target_not_top1": 1
+    },
+    "latency_ms": {
+      "average": 725.51,
+      "p95": 1088.9,
+      "max": 4922.0
+    }
+  },
+  "comparison": {
+    "pass_gained": 10,
+    "pass_lost": 1,
+    "top1_changed": 46
+  }
+}

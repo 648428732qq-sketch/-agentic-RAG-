@@ -4,13 +4,25 @@ from langchain_qdrant import QdrantVectorStore, FastEmbedSparse, RetrievalMode
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 
+from db.qdrant_client_factory import create_qdrant_client
+
+
+def _embedding_model_kwargs():
+    kwargs = {"local_files_only": config.EMBEDDING_LOCAL_FILES_ONLY}
+    if config.EMBEDDING_DEVICE and config.EMBEDDING_DEVICE != "auto":
+        kwargs["device"] = config.EMBEDDING_DEVICE
+    return kwargs
+
 class VectorDbManager:
     __client: QdrantClient
     __dense_embeddings: HuggingFaceEmbeddings
     __sparse_embeddings: FastEmbedSparse
     def __init__(self):
-        self.__client = QdrantClient(path=config.QDRANT_DB_PATH)
-        self.__dense_embeddings = HuggingFaceEmbeddings(model_name=config.DENSE_MODEL)
+        self.__client = create_qdrant_client()
+        self.__dense_embeddings = HuggingFaceEmbeddings(
+            model_name=config.DENSE_MODEL,
+            model_kwargs=_embedding_model_kwargs(),
+        )
         self.__sparse_embeddings = FastEmbedSparse(model_name=config.SPARSE_MODEL)
 
     def create_collection(self, collection_name):

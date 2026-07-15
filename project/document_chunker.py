@@ -1,8 +1,21 @@
 import os
 import glob
+import re
 import config
 from pathlib import Path
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+
+
+def _extract_source_url(text: str) -> str | None:
+    """从 Markdown 文本中提取 '> 来源: <url>' 行"""
+    m = re.search(r"^>\s*来源[：:]\s*(https?://\S+)", text, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def _extract_chapter_title(text: str) -> str:
+    """提取第一个 ## 标题行作为章节参考"""
+    m = re.search(r"^##\s+(.+)$", text, re.MULTILINE)
+    return m.group(1).strip() if m else ""
 
 class DocumentChuncker:
     def __init__(self):
@@ -121,7 +134,19 @@ class DocumentChuncker:
     def __create_child_chunks(self, all_parent_pairs, all_child_chunks, parent_chunks, doc_path):
         for i, p_chunk in enumerate(parent_chunks):
             parent_id = f"{doc_path.stem}_parent_{i}"
-            p_chunk.metadata.update({"source": str(doc_path.stem)+".pdf", "parent_id": parent_id})
-            
+            source_url = _extract_source_url(p_chunk.page_content)
+            chapter = _extract_chapter_title(p_chunk.page_content)
+
+            # 组合验证来源: 优先用content中的URL, 否则用文件名
+            verify_source = source_url or f"file:{doc_path.name}"
+            p_chunk.metadata.update({
+                "source": str(doc_path.stem) + ".pdf",
+                "source_url": verify_source,
+                "chapter": chapter,
+                "parent_id": parent_id,
+                "chunk_index": i,
+                "doc_name": doc_path.name,
+            })
+
             all_parent_pairs.append((parent_id, p_chunk))
             all_child_chunks.extend(self.__child_splitter.split_documents([p_chunk]))

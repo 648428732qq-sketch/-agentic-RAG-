@@ -1,10 +1,98 @@
+# OS files
 .DS_Store
+Thumbs.db
+Desktop.ini
+
+# Runtime indexes and local stores
 qdrant_db/
 markdown_docs/
 parent_store/
-docs/
+logs/
+artifacts/
+output/
+tmp/
+
+# Local datasets, crawled corpora, and generated knowledge artifacts
+datasets/*
+# Keep only the small public benchmark summary referenced by README.
+!datasets/structured/
+datasets/structured/*
+!datasets/structured/rerank_locked_v1_api_results/
+datasets/structured/rerank_locked_v1_api_results/*
+!datasets/structured/rerank_locked_v1_api_results/report.json
+Chinese-medical-dialogue-data/
+Huatuo-26M/
+Zhongjing/
+ChatMed_TCM-v0.2.json
+medicalQA.json
+
+# Generated eval sets and prediction outputs
+tests/evals/
+!tests/evals/
+tests/evals/*
+!tests/evals/rerank_locked_v1/
+!tests/evals/rerank_locked_v1/**
+
+# Local tool/cache directories
+.agents/
+.codex/
+.codegraph/
+.trae/
+.cache/
+cache/
+.tmp/
+.runtime/
+.models/
+models/
+
+# Python/cache artifacts
 __pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.ipynb_checkpoints/
+
+# IDE and environment files
 .vscode/
 .env
+.env.*
+!.env.example
+!.env.template
 .venv/
+.venv-linux/
+.bootstrap/
 venv/
+
+# Runtime process files and model weights
+*.pid
+*.log
+models/**/*.zip
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.gguf
+*.onnx
+
+# Credentials and private keys
+*.pem
+*.key
+.secrets/
+credentials.json
+secrets.json
+
+# Personal interview and resume materials (not part of the public project)
+**/interview_notes/
+**/*面试*
+**/*简历*
+CLAUDE.md
+AGENTS.md
+MEMORY.md
+
+# Crawl scratch files
+crawl.log
+crawl_state*.json

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "rerank_locked_v1",
+  "created": "2026-07-02",
+  "seed": "rerank-locked-v1-20260702",
+  "source": "synthetic hard-negative cases generated from the structured syndrome dictionary",
+  "external_clinical_blindset": false,
+  "dictionary": "datasets/structured/syndrome_dictionary.jsonl",
+  "dictionary_sha256": "5a9c5548829d529b5768079127a5b4df924554707cd84fe53d9c9446dba95cdf",
+  "selected_formula_count": 60,
+  "case_count": 221,
+  "style_counts": {
+    "full_signature_topk": 60,
+    "missing_required_clarify": 60,
+    "forbidden_conflict": 41,
+    "shared_terms_clarify": 60
+  },
+  "questions": "questions.jsonl",
+  "gold": "private/gold_keys.jsonl",
+  "usage": "Lock after generation; do not tune prompts, gates, or rerank parameters against this set."
+}

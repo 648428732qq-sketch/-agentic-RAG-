@@ -4,6 +4,8 @@
 
 <h1 align="center">Agentic RAG for Dummies</h1>
 
+> Ubuntu/CUDA 服务器迁移、UTF-8、Qdrant 重建和 GPU 验收说明见 [docs/UBUNTU_CUDA_MIGRATION.md](docs/UBUNTU_CUDA_MIGRATION.md)。
+
 <p align="center">
   <strong>Build a modular Agentic RAG system with LangGraph, conversation memory, and human-in-the-loop query clarification</strong>
 </p>
@@ -50,6 +52,45 @@
 ## Overview
 
 This repository demonstrates how to build an **Agentic RAG (Retrieval-Augmented Generation)** system using LangGraph with minimal code. Most RAG tutorials show basic concepts but lack guidance on building modular, agent-driven systems — this project bridges that gap by providing **both learning materials and an extensible architecture**.
+
+### GPU Rerank Evaluation and Demo
+
+The structured TCM retrieval path supports a safety-preserving second stage based on
+`BAAI/bge-reranker-v2-m3`. On an NVIDIA A100, a fixed-seed locked regression set with
+60 formulas and 221 synthetic hard-negative cases improved from **90.95%** to
+**95.02%** (+4.07 pp). A broader 150-formula/538-case run improved from **93.87%** to
+**96.47%**. Full-signature Recall@1 remained saturated at 100%.
+
+```mermaid
+flowchart LR
+    Q["Colloquial symptom query"] --> T["Query normalization"]
+    T --> R["Dense + lexical retrieval"]
+    R --> H["Local evidence and safety gates"]
+    H --> X["bge-reranker-v2-m3"]
+    X --> D["Grounded answer / clarify / no match"]
+```
+
+Run the reproducible in-memory GPU A/B benchmark:
+
+```bash
+CUDA_VISIBLE_DEVICES=2 .venv-linux/bin/python scripts/run_gpu_rerank_ab.py \
+  --device cuda \
+  --rerank-model models/bge-reranker-v2-m3
+```
+
+Run the private local demo on a non-public port:
+
+```bash
+CUDA_VISIBLE_DEVICES=2 \
+RERANK_DEMO_SERVER_NAME=127.0.0.1 \
+RERANK_DEMO_SERVER_PORT=17860 \
+.venv-linux/bin/python scripts/rerank_gradio_demo.py
+```
+
+See [GPU Rerank Evaluation](docs/RERANK_GPU_EVALUATION.md) for methodology,
+limitations, locked-regression-set instructions, and resume-safe claims.
+
+![TCM syndrome rerank test page](assets/rerank_demo.png)
 
 ### What's inside
 
